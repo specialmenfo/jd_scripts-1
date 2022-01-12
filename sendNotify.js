@@ -8,6 +8,7 @@
  */
 const querystring = require("querystring");
 const fs = require('fs');
+const {format} = require("date-fns");
 const $ = new Env();
 const timeout = 15000;//超时时间(单位毫秒)
 // =======================================微信server酱通知设置区域===========================================
@@ -84,6 +85,10 @@ let go_cqhttp_method = '' // send_private_msg or send_group_msg
 process.env.go_cqhttp_url ? go_cqhttp_url = process.env.go_cqhttp_url : ''
 process.env.go_cqhttp_qq ? go_cqhttp_qq = process.env.go_cqhttp_qq : ''
 process.env.go_cqhttp_method ? go_cqhttp_method = process.env.go_cqhttp_method : ''
+
+// =======================================wxpusher设置区域=======================================
+// Doc https://wxpusher.zjiecode.com/admin/
+let appToken = '';  // https://wxpusher.zjiecode.com/admin/main/app/appToken
 
 //==========================云端环境变量的判断与接收=========================
 if (process.env.PUSH_KEY) {
@@ -163,6 +168,9 @@ if (process.env.PUSH_PLUS_TOKEN) {
 if (process.env.PUSH_PLUS_USER) {
   PUSH_PLUS_USER = process.env.PUSH_PLUS_USER;
 }
+if (process.env.appToken) {
+  appToken = process.env.appToken;
+}
 
 //==========================云端环境变量的判断与接收=========================
 
@@ -174,23 +182,29 @@ if (process.env.PUSH_PLUS_USER) {
  * @param author 作者仓库等信息  例：`本脚本免费使用 By：xxxx`
  * @returns {Promise<unknown>}
  */
-async function sendNotify(text, desp, params = {}, author = '\n\n仅供用于学习') {
+async function sendNotify(text, desp, params = {}, author = `\n\nJDHelloWorld.ts\n${format(Date.now(), "yyyy-MM-dd HH:mm:ss")}`) {
   //提供6种通知
-  desp += author;//增加作者信息，防止被贩卖等
   let remarks = '';
   try {
-    fs.accessSync('./tools/account.json')
-    remarks = JSON.parse(fs.readFileSync('./tools/account.json').toString())
+    fs.accessSync('./utils/account.json')
+    remarks = JSON.parse(fs.readFileSync('./utils/account.json').toString() || '[]')
   } catch (e) {
   }
   if (remarks) {
     for (let account of remarks) {
-      if (account['pt_pin'] && account['remarks']){
-        text = text.replace(new RegExp(account['pt_pin'], 'gm'), account['remarks'])
-        desp = desp.replace(new RegExp(account['pt_pin'], 'gm'), account['remarks'])
+      let pt_pin = decodeURIComponent(account['pt_pin']).split(';')[0]
+      for (let subDesp of desp.split('\n\n')) {
+        if (subDesp.indexOf(pt_pin) > -1 && account['wxpusher_uid']) {
+          await wxpusher(text, subDesp, account['wxpusher_uid'])
+        }
+      }
+      if (pt_pin && account['remarks']) {
+        text = text.replace(new RegExp(pt_pin, 'gm'), account['remarks'])
+        desp = desp.replace(new RegExp(pt_pin, 'gm'), account['remarks'])
       }
     }
   }
+  desp += author;
   await Promise.all([
     serverNotify(text, desp),//微信server酱
     serverWecomNotify(text, desp), // 自建server酱推送
@@ -283,7 +297,7 @@ function serverNotify(text, desp, time = 2100) {
         })
       }, time)
     } else {
-      console.log('\n\n您未提供server酱的SCKEY，取消微信推送消息通知🚫\n');
+      // console.log('\n\n您未提供server酱的SCKEY，取消微信推送消息通知🚫\n');
       resolve()
     }
   })
@@ -328,7 +342,7 @@ function serverWecomNotify(text, desp, time = 2100) {
         })
       }, time)
     } else {
-      console.log('\n\n您未提供自建server酱的SCKEY，取消推送自建server酱消息通知🚫\n');
+      // console.log('\n\n您未提供自建server酱的SCKEY，取消推送自建server酱消息通知🚫\n');
       resolve()
     }
   })
@@ -364,7 +378,7 @@ function BarkNotify(text, desp, params = {}) {
         }
       })
     } else {
-      console.log('您未提供Bark的APP推送BARK_PUSH，取消Bark推送消息通知🚫\n');
+      // console.log('您未提供Bark的APP推送BARK_PUSH，取消Bark推送消息通知🚫\n');
       resolve()
     }
   })
@@ -375,9 +389,13 @@ function tgBotNotify(text, desp) {
     if (TG_BOT_TOKEN && TG_USER_ID) {
       const options = {
         url: `https://${TG_API_HOST}/bot${TG_BOT_TOKEN}/sendMessage`,
-        body: `chat_id=${TG_USER_ID}&text=${text}\n\n${desp}&disable_web_page_preview=true`,
+        json: {
+            chat_id: `${TG_USER_ID}`,
+            text: `${text}\n\n${desp}`,
+            disable_web_page_preview:true,
+          },
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
+          'Content-Type': 'application/json',
         },
         timeout
       }
@@ -416,7 +434,7 @@ function tgBotNotify(text, desp) {
         }
       })
     } else {
-      console.log('您未提供telegram机器人推送所需的TG_BOT_TOKEN和TG_USER_ID，取消telegram推送消息通知🚫\n');
+      // console.log('您未提供telegram机器人推送所需的TG_BOT_TOKEN和TG_USER_ID，取消telegram推送消息通知🚫\n');
       resolve()
     }
   })
@@ -484,7 +502,7 @@ function ddBotNotify(text, desp) {
         }
       })
     } else {
-      console.log('您未提供钉钉机器人推送所需的DD_BOT_TOKEN或者DD_BOT_SECRET，取消钉钉推送消息通知🚫\n');
+      // console.log('您未提供钉钉机器人推送所需的DD_BOT_TOKEN或者DD_BOT_SECRET，取消钉钉推送消息通知🚫\n');
       resolve()
     }
   })
@@ -526,7 +544,7 @@ function qywxBotNotify(text, desp) {
         }
       });
     } else {
-      console.log('您未提供企业微信机器人推送所需的QYWX_KEY，取消企业微信推送消息通知🚫\n');
+      // console.log('您未提供企业微信机器人推送所需的QYWX_KEY，取消企业微信推送消息通知🚫\n');
       resolve();
     }
   });
@@ -655,7 +673,7 @@ function qywxamNotify(text, desp) {
         });
       });
     } else {
-      console.log('您未提供企业微信应用消息推送所需的QYWX_AM，取消企业微信应用消息推送消息通知🚫\n');
+      // console.log('您未提供企业微信应用消息推送所需的QYWX_AM，取消企业微信应用消息推送消息通知🚫\n');
       resolve();
     }
   });
@@ -699,7 +717,7 @@ function iGotNotify(text, desp, params = {}) {
         }
       })
     } else {
-      console.log('您未提供iGot的推送IGOT_PUSH_KEY，取消iGot推送消息通知🚫\n');
+      // console.log('您未提供iGot的推送IGOT_PUSH_KEY，取消iGot推送消息通知🚫\n');
       resolve()
     }
   })
@@ -743,9 +761,47 @@ function pushPlusNotify(text, desp) {
         }
       })
     } else {
-      console.log('您未提供push+推送所需的PUSH_PLUS_TOKEN，取消push+推送消息通知🚫\n');
+      // console.log('您未提供push+推送所需的PUSH_PLUS_TOKEN，取消push+推送消息通知🚫\n');
       resolve()
     }
+  })
+}
+
+function wxpusher(title, content, uid) {
+  return new Promise(resolve => {
+    $.post({
+      url: 'http://wxpusher.zjiecode.com/api/send/message',
+      body: JSON.stringify({
+        "appToken": appToken,
+        "content": `${title}\n\n${content}`,
+        "summary": title,//消息摘要，显示在微信聊天页面或者模版消息卡片上，限制长度100，可以不传，不传默认截取content前面的内容。
+        "contentType": 1,//内容类型 1表示文字  2表示html(只发送body标签内部的数据即可，不包括body标签) 3表示markdown
+        "topicIds": [ //发送目标的topicId，是一个数组！！！，也就是群发，使用uids单发的时候， 可以不传。
+        ],
+        "uids": [uid],//发送目标的UID，是一个数组。注意uids和topicIds可以同时填写，也可以只填写一个。
+        "url": "" //原文链接，可选参数
+      }),
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    }, (err, resp, data) => {
+      try {
+        if (!err) {
+          data = $.toObj(data)
+          if (data.code === 1000) {
+            console.log(`wxpusher: ${uid} 发送成功`)
+          } else {
+            console.log(`wxpusher: ${uid} 发送失败\n${data}`)
+          }
+        } else {
+          console.log('wxpusher Error1:', err)
+        }
+      } catch (e) {
+        console.log('wxpusher Error2:', e)
+      } finally {
+        resolve()
+      }
+    })
   })
 }
 

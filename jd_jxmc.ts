@@ -1,45 +1,41 @@
 /**
  * 京喜牧场
- * 买、喂、收蛋、锄草、挑逗
- * export HELP_HW=true     // 默认帮助HelloWorld
- * export HELP_POOL=true   // 默认帮助助力池
+ * cron: 10 0,12,18 * * *
  */
 
-import {format} from 'date-fns';
-import axios from 'axios';
-import USER_AGENT, {requireConfig, TotalBean, getBeanShareCode, getFarmShareCode, wait} from './TS_USER_AGENTS';
-import {Md5} from "ts-md5";
+import axios from 'axios'
+import {Md5} from "ts-md5"
+import {sendNotify} from './sendNotify'
+import {requireConfig, getBeanShareCode, getFarmShareCode, wait, requestAlgo, h5st, o2s, randomWord, getshareCodeHW} from './TS_USER_AGENTS'
 
-const CryptoJS = require('crypto-js')
-const notify = require('./sendNotify')
-const A = require('./tools/jd_jxmcToken')
+const token = require('./utils/jd_jxmc.js').token
 
-let appId: number = 10028, fingerprint: string | number, token: string, enCryptMethodJD: any;
-let cookie: string = '', res: any = '', shareCodes: string[] = [];
-let homePageInfo: any;
-let UserName: string, index: number;
-
-let HELP_HW: string = process.env.HELP_HW ? process.env.HELP_HW : "true";
-console.log('帮助HelloWorld:', HELP_HW)
-let HELP_POOL: string = process.env.HELP_POOL ? process.env.HELP_POOL : "true";
-console.log('帮助助力池:', HELP_POOL)
+let cookie: string = '', res: any = '', shareCodes: string[] = [], homePageInfo: any = '', jxToken: any = '', UserName: string = ''
+let shareCodesSelf: string[] = [], shareCodesHW: string[] = []
 
 !(async () => {
-  await requestAlgo();
-  let cookiesArr: any = await requireConfig();
-
-  for (let i = 0; i < cookiesArr.length; i++) {
-    cookie = cookiesArr[i];
+  await requestAlgo()
+  let cookiesArr: any = await requireConfig()
+  for (let [index, value] of cookiesArr.entries()) {
+    cookie = value
     UserName = decodeURIComponent(cookie.match(/pt_pin=([^;]*)/)![1])
-    index = i + 1;
-    let {isLogin, nickName}: any = await TotalBean(cookie)
-    if (!isLogin) {
-      notify.sendNotify(__filename.split('/').pop(), `cookie已失效\n京东账号${index}：${nickName || UserName}`)
-      continue
-    }
-    console.log(`\n开始【京东账号${index}】${nickName || UserName}\n`);
+    console.log(`\n开始【京东账号${index + 1}】${UserName}\n`)
 
-    homePageInfo = await api('queryservice/GetHomePageInfo', 'channel,isgift,sceneid', {isgift: 0})
+    jxToken = await token(cookie)
+    homePageInfo = await api('queryservice/GetHomePageInfo', 'activeid,activekey,channel,isgift,isqueryinviteicon,isquerypicksite,jxmc_jstoken,phoneid,sceneid,timestamp', {isgift: 1, isquerypicksite: 1, isqueryinviteicon: 1})
+    await wait(2000)
+
+    // if (homePageInfo.data.maintaskId !== 'pause') {
+    //   console.log('init...')
+    //   for (let j = 0; j < 20; j++) {
+    //     res = await api('operservice/DoMainTask', 'activeid,activekey,channel,jxmc_jstoken,phoneid,sceneid,step,timestamp', {step: homePageInfo.data.maintaskId})
+    //     if (res.data.maintaskId === 'pause')
+    //       break
+    //     await wait(2000)
+    //   }
+    // }
+
+    homePageInfo = await api('queryservice/GetHomePageInfo', 'activeid,activekey,channel,isgift,isqueryinviteicon,isquerypicksite,jxmc_jstoken,phoneid,sceneid,timestamp', {isgift: 1, isquerypicksite: 1, isqueryinviteicon: 1})
     let lastgettime: number
     if (homePageInfo.data?.cow?.lastgettime) {
       lastgettime = homePageInfo.data.cow.lastgettime
@@ -47,34 +43,109 @@ console.log('帮助助力池:', HELP_POOL)
       continue
     }
 
-    let food: number = 0
+    let food: number = 0, petid: string = '', coins: number = 0, petNum: number = 0, petids: string[] = []
     try {
-      food = homePageInfo.data.materialinfo[0].value;
-    } catch (e) {
-      console.log('未开通？黑号？')
+      food = homePageInfo.data.materialinfo[0].value
+      petid = homePageInfo.data.petinfo[0].petid
+      petids = homePageInfo.data.petinfo.map(pet => {
+        return pet.petid
+      })
+      console.log('当前🐔🐔：', petids)
+      petNum = homePageInfo.data.petinfo.length
+      coins = homePageInfo.data.coins
+    } catch (e: any) {
+      console.log('初始化出错，手动去app')
       continue
     }
-    let petid: number = homePageInfo.data.petinfo[0].petid;
-    let coins = homePageInfo.data.coins;
 
-    console.log('助力码：', homePageInfo.data.sharekey);
-    shareCodes.push(homePageInfo.data.sharekey);
+    console.log('助力码:', homePageInfo.data.sharekey)
+    shareCodesSelf.push(homePageInfo.data.sharekey)
     try {
-      await makeShareCodes(homePageInfo.data.sharekey);
-    } catch (e) {
+      await makeShareCodes(homePageInfo.data.sharekey)
+    } catch (e: any) {
       console.log(e)
     }
 
-    console.log('现有草:', food);
-    console.log('金币:', coins);
+    console.log('草草🌿', food)
+    console.log('蛋蛋🥚', homePageInfo.data.eggcnt)
+    console.log('钱钱💰', coins)
+    console.log('鸡鸡🐔', petNum)
+    await wait(3000)
 
-    // 收牛牛
-    res = await api('operservice/GetCoin', 'channel,sceneid,token', {token: A(lastgettime)})
-    if (res.ret === 0)
-      console.log('收牛牛：', res.data.addcoin)
+    // 助农
+    let tasks: any = await api('GetUserTaskStatusList', 'bizCode,dateType,jxpp_wxapp_type,showAreaTaskFlag,source', {dateType: '2', showAreaTaskFlag: 0, jxpp_wxapp_type: 7}, true)
+    await wait(2000)
+    for (let t of tasks.data.userTaskStatusList) {
+      if (t.awardStatus === 2 && !['邀请牧场新用户助力', '拆开邀人红包', '去下单得爱心'].includes(t.taskName)) {
+        console.log(t.taskName)
+        if (t.completedTimes < t.targetTimes) {
+          for (let j = t.completedTimes; j < t.targetTimes; j++) {
+            res = await api('DoTask', 'bizCode,configExtra,source,taskId', {taskId: t.taskId}, true)
+            if (res.ret === 0) {
+              console.log('任务完成')
+            } else {
+              console.log('任务失败')
+              break
+            }
+            await wait(6000)
+          }
+        } else {
+          res = await api('Award', 'bizCode,source,taskId', {taskId: t.taskId}, true)
+          if (res.ret === 0) {
+            console.log('领奖成功', res.data.prizeInfo.match(/:(.*)}/)![1])
+          } else {
+            console.log('领奖失败')
+            break
+          }
+          await wait(4000)
+        }
+      }
+    }
+    await wait(5000)
+
+    // 扭蛋机
+    res = await api('queryservice/GetCardInfo', 'activeid,activekey,channel,jxmc_jstoken,phoneid,sceneid,timestamp')
+    await wait(5000)
+    let drawTimes = res.data.times
+    if (typeof drawTimes === "undefined") {
+      await sendNotify("牧场扭蛋机错误", `账号${index + 1} ${UserName}\n手动建造扭蛋机`)
+    } else {
+      console.log('扭蛋机剩余次数:', drawTimes)
+      for (let j = 0; j < drawTimes; j++) {
+        res = await api('operservice/DrawCard', 'activeid,activekey,channel,jxmc_jstoken,phoneid,sceneid,timestamp')
+        if (res.ret === 0) {
+          if (res.data.prizetype === 3) {
+            console.log('抽奖成功，金币:', res.data.addcoins)
+          } else if (res.data.prizetype === 1) {
+            console.log('抽奖成功，卡片:', res.data.cardtype)
+          } else {
+            console.log('抽奖成功，其他:', res)
+          }
+          await wait(8000)
+        } else {
+          console.log('抽奖失败:', res)
+          break
+        }
+      }
+    }
+
+    res = await api('queryservice/GetCardInfo', 'activeid,activekey,channel,jxmc_jstoken,phoneid,sceneid,timestamp')
+    try {
+      for (let card of res.data.cardinfo) {
+        console.log(`card ${card.cardtype}`, card.currnum, '/', card.neednum)
+        if (card.currnum >= card.neednum && petNum < 6) {
+          console.log('可以兑换')
+          res = await api('operservice/Combine', 'activeid,activekey,cardtype,channel,jxmc_jstoken,phoneid,sceneid,timestamp', {cardtype: card.cardtype})
+          res.ret === 0 ? console.log('兑换成功') : ''
+          await wait(4000)
+        }
+      }
+    } catch (e) {
+    }
+    await wait(5000)
 
     // 签到
-    res = await api('queryservice/GetSignInfo', 'channel,sceneid')
+    res = await api('queryservice/GetSignInfo', 'activeid,activekey,channel,jxmc_jstoken,phoneid,sceneid,timestamp')
     if (res.data.signlist) {
       for (let day of res.data.signlist) {
         if (day.fortoday && !day.hasdone) {
@@ -90,19 +161,31 @@ console.log('帮助助力池:', HELP_POOL)
     } else {
       console.log('没有获取到签到信息！')
     }
+    await wait(5000)
 
-    let taskRetCode: number = 0;
-    while (taskRetCode === 0) {
-      taskRetCode = await getTask();
-      console.log('taskRetCode:', taskRetCode)
-      if (taskRetCode === 0) {
-        await wait(4000);
-      } else {
-        break
+    // 登录领白菜
+    res = await api('queryservice/GetVisitBackInfo', 'activeid,activekey,channel,jxmc_jstoken,phoneid,sceneid,timestamp')
+    await wait(2000)
+    if (res.data.iscandraw === 1) {
+      res = await api('operservice/GetVisitBackCabbage', 'activeid,activekey,channel,jxmc_jstoken,phoneid,sceneid,timestamp')
+      if (res.ret === 0) {
+        console.log('登录领白菜:', res.data.drawnum)
       }
     }
+    await wait(5000)
+
+    console.log('任务列表开始')
+    for (let j = 0; j < 30; j++) {
+      if (await getTask() === 0) {
+        break
+      }
+      await wait(4000)
+    }
+    console.log('任务列表结束')
+    await wait(5000)
+
     while (coins >= 5000 && food <= 500) {
-      res = await api('operservice/Buy', 'channel,sceneid,type', {type: '1'})
+      res = await api('operservice/Buy', 'activeid,activekey,channel,jxmc_jstoken,phoneid,sceneid,timestamp,type', {type: '1'})
       if (res.ret === 0) {
         console.log('买草成功:', res.data.newnum)
         coins -= 5000
@@ -111,291 +194,191 @@ console.log('帮助助力池:', HELP_POOL)
         console.log(res)
         break
       }
-      await wait(4000)
+      await wait(8000)
     }
-    await wait(2000)
+    await wait(6000)
+
     while (food >= 10) {
-      res = await api('operservice/Feed', 'channel,sceneid')
+      food -= 10
+      res = await api('operservice/Feed', 'activeid,activekey,channel,jxmc_jstoken,phoneid,sceneid,timestamp')
       if (res.ret === 0) {
-        food -= 10
-        console.log('剩余草:', res.data.newnum)
+        console.log('喂食:', res.data.newnum)
       } else if (res.ret === 2020) {
-        if (res.data.maintaskId === 'pause') {
-          console.log('收🥚')
-          res = await api('operservice/GetSelfResult', 'channel,itemid,sceneid,type', {petid: petid, type: '11'})
-          if (res.ret === 0) {
-            console.log('收🥚成功:', res.data.newnum)
+        console.log('收🥚')
+        homePageInfo = await api('queryservice/GetHomePageInfo', 'activeid,activekey,channel,isgift,isqueryinviteicon,isquerypicksite,jxmc_jstoken,phoneid,sceneid,timestamp', {
+          isgift: 1,
+          isquerypicksite: 1,
+          isqueryinviteicon: 1
+        })
+        for (let t of homePageInfo.data.petinfo) {
+          if (t.cangetborn === 1) {
+            petid = t.petid
+            break
           }
         }
+        res = await api('operservice/GetSelfResult', 'activeid,activekey,channel,itemid,jxmc_jstoken,phoneid,sceneid,timestamp,type', {itemid: petid, type: '11'})
+        if (res.ret === 0) {
+          console.log('收🥚成功:', res.data.newnum)
+        } else {
+          console.log('收🥚失败:', res)
+          break
+        }
+      } else if (res.ret === 2005) {
+        console.log('今天吃撑了')
+        break
       } else {
-        console.log(res)
+        console.log('Feed未知错误:', res)
         break
       }
-      await wait(4000)
+      await wait(8000)
     }
-    await wait(2000)
+    await wait(8000)
 
-    while (1) {
+    console.log('除草...start')
+    for (let j = 0; j < 30; j++) {
       try {
-        res = await api('operservice/Action', 'channel,sceneid,type', {type: '2'})
-        if (res.data.addcoins === 0) break
+        res = await api('operservice/Action', 'activeid,activekey,channel,jxmc_jstoken,phoneid,sceneid,timestamp,type', {type: '2'})
+        if (res.data.addcoins === 0 || JSON.stringify(res.data) === '{}') break
         console.log('锄草:', res.data.addcoins)
-        await wait(1500)
-      } catch (e) {
-        console.log('Error:', e)
+        await wait(5000)
+        if (res.data.surprise) {
+          res = await api("operservice/GetSelfResult", "activeid,activekey,channel,jxmc_jstoken,phoneid,sceneid,timestamp,type", {type: '14', itemid: 'undefined'})
+          console.log('锄草奖励:', res.data.prizepool)
+          await wait(5000)
+        }
+      } catch (e: any) {
+        console.log('除草 Error:', e.response)
         break
       }
     }
-    await wait(2000)
+    await wait(6000)
 
-    while (1) {
+    for (let j = 0; j < 30; j++) {
       try {
-        res = await api('operservice/Action', 'channel,sceneid,type', {type: '1', petid: petid})
-        if (res.data.addcoins === 0) break
+        res = await api('operservice/Action', 'activeid,activekey,channel,jxmc_jstoken,petid,phoneid,sceneid,timestamp,type', {type: '1', petid: petids[Math.floor((Math.random() * petids.length))]})
+        if (res.data.addcoins === 0 || JSON.stringify(res.data) === '{}') break
         console.log('挑逗:', res.data.addcoins)
-        await wait(1500)
-      } catch (e) {
-        console.log('Error:', e)
+        await wait(6000)
+      } catch (e: any) {
+        console.log('挑逗 Error:', e.response)
         break
       }
     }
   }
 
-  // 获取随机助力码
-  /*
-  if (HELP_HW === 'true') {
-    try {
-      let {data} = await axios.get("https://api.sharecode.ga/api/HW_CODES")
-      shareCodes = [
-        ...shareCodes,
-        ...data.jxcfd
-      ]
-      console.log('获取HelloWorld助力码成功')
-    } catch (e) {
-      console.log('获取HelloWorld助力码出错')
+  await wait(5000)
+  for (let [index, value] of cookiesArr.entries()) {
+    if (shareCodesHW.length === 0) {
+      shareCodesHW = await getshareCodeHW('jxmc')
     }
-  }
-
-   */
-  if (HELP_POOL === 'true') {
+    // 获取随机助力码
     try {
-      let {data} = await axios.get('https://api.sharecode.ga/api/jxmc/6', {timeout: 10000})
-      console.log('获取到20个随机助力码:', data.data)
-      shareCodes = [...shareCodes, ...data.data]
-    } catch (e) {
+      let {data}: any = await axios.get(`https://api.jdsharecode.xyz/api/jxmc/30`, {timeout: 10000})
+      console.log('获取到30个随机助力码:', data.data)
+      shareCodes = Array.from(new Set([...shareCodesSelf, ...shareCodesHW, ...data.data]))
+    } catch (e: any) {
       console.log('获取助力池失败')
+      shareCodes = Array.from(new Set([...shareCodesSelf, ...shareCodesHW]))
     }
-  } else {
-    console.log('你的设置是不帮助助力池！')
-  }
-  for (let i = 0; i < cookiesArr.length; i++) {
-    cookie = cookiesArr[i]
-    for (let j = 0; j < shareCodes.length; j++) {
-      console.log(`账号${i + 1}去助力${shareCodes[j]}`)
-      res = await api('operservice/EnrollFriend', 'channel,sceneid,sharekey', {sharekey: shareCodes[j]})
-      if (res.data.result === 1) {
-        console.log('不助力自己')
-      } else if (res.ret === 0) {
-        console.log('助力结果：', res)
-        console.log('助力成功，获得：', res.data.addcoins)
+
+    cookie = value
+    jxToken = await token(cookie)
+    for (let code of shareCodes) {
+      console.log(`账号${index + 1} 去助力 ${code}`)
+      res = await api('operservice/EnrollFriend', 'activeid,activekey,channel,jxmc_jstoken,phoneid,sceneid,sharekey,timestamp', {sharekey: code})
+      if (res.ret === 0) {
+        console.log('成功，获得:', res.data.addcoins)
       } else {
-        console.log(res)
+        console.log('失败:', res)
       }
-      await wait(1000)
+      await wait(8000)
     }
   }
 })()
 
 interface Params {
   isgift?: number,
-  petid?: number,
+  isquerypicksite?: number,
+  petid?: string,
+  itemid?: string,
   type?: string,
   taskId?: number
   configExtra?: string,
   sharekey?: string,
   currdate?: string,
-  token?: string
+  token?: string,
+  isqueryinviteicon?: number,
+  showAreaTaskFlag?: number,
+  jxpp_wxapp_type?: number,
+  dateType?: string,
+  step?: string,
+  cardtype?: number,
 }
 
-function api(fn: string, stk: string, params: Params = {}) {
-  return new Promise(async (resolve, reject) => {
-    let url = `https://m.jingxi.com/jxmc/${fn}?channel=7&sceneid=1001&_stk=${encodeURIComponent(stk)}&_ste=1&sceneval=2`
-    if (Object.keys(params).length !== 0) {
-      let key: (keyof Params)
-      for (key in params) {
-        if (params.hasOwnProperty(key))
-          url += `&${key}=${params[key]}`
-      }
-    }
-    url += '&h5st=' + decrypt(stk, url)
-    try {
-      let {data} = await axios.get(url, {
-        headers: {
-          'Cookie': cookie,
-          'Host': 'm.jingxi.com',
-          'User-Agent': 'jdpingou;iPhone;4.11.0;12.4.1;52cf225f0c463b69e1e36b11783074f9a7d9cbf0;network/wifi;model/iPhone11,6;appBuild/100591;ADID/C51FD279-5C69-4F94-B1C5-890BC8EB501F;supportApplePay/1;hasUPPay/0;pushNoticeIsOpen/0;hasOCPay/0;supportBestPay/0;session/503;pap/JA2019_3111789;brand/apple;supportJDSHWK/1;Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
-          'Referer': 'https://st.jingxi.com/',
-        }
-      })
-      resolve(data)
-    } catch (e) {
-      reject(401)
-    }
-  })
-}
-
-function getTask() {
-  return new Promise<number>(async resolve => {
-    let tasks: any = await taskAPI('GetUserTaskStatusList', 'bizCode,dateType,source')
-    let doTaskRes: any = {ret: 1};
-    for (let t of tasks.data.userTaskStatusList) {
-      if ((t.dateType === 1 || t.dateType === 2) && t.completedTimes == t.targetTimes && t.awardStatus === 2) {
-        // 成就任务
-        t.dateType === 1
-          ?
-          console.log('成就任务可领取:', t.taskName, t.completedTimes, t.targetTimes)
-          :
-          console.log('每日任务可领取:', t.taskName, t.completedTimes, t.targetTimes)
-
-        doTaskRes = await taskAPI('Award', 'bizCode,source,taskId', {taskId: t.taskId})
+async function getTask() {
+  console.log('刷新任务列表')
+  res = await api('GetUserTaskStatusList', 'bizCode,dateType,jxpp_wxapp_type,showAreaTaskFlag,source', {dateType: '', showAreaTaskFlag: 0, jxpp_wxapp_type: 7})
+  for (let t of res.data.userTaskStatusList) {
+    if (t.completedTimes == t.targetTimes && t.awardStatus === 2) {
+      res = await api('Award', 'bizCode,source,taskId', {taskId: t.taskId})
+      if (res.ret === 0) {
+        let awardCoin = res.data.prizeInfo.match(/:(.*)}/)![1] * 1
+        console.log('领奖成功:', awardCoin)
         await wait(4000)
-        if (doTaskRes.ret === 0) {
-          let awardCoin = doTaskRes['data']['prizeInfo'].match(/:(.*)}/)![1] * 1
-          console.log('领奖成功:', awardCoin)
-        }
-      }
-      if (t.dateType === 2 && t.completedTimes < t.targetTimes && t.awardStatus === 2 && t.taskType === 2) {
-        console.log('可做每日任务:', t.taskName, t.taskId)
-        doTaskRes = await taskAPI('DoTask', 'bizCode,configExtra,source,taskId', {taskId: t.taskId, configExtra: ''})
-        console.log(doTaskRes)
-        if (doTaskRes.ret === 0) {
-          console.log('任务完成')
-          await wait(5000)
-        }
+        return 1
+      } else {
+        console.log('领奖失败:', res)
+        return 0
       }
     }
-    resolve(doTaskRes.ret)
-  })
-}
 
-function taskAPI(fn: string, stk: string, params: Params = {}) {
-  return new Promise(async resolve => {
-    let url = `https://m.jingxi.com/newtasksys/newtasksys_front/${fn}?_=${Date.now()}&source=jxmc&bizCode=jxmc&_ste=1&sceneval=2&_stk=${encodeURIComponent(stk)}&g_login_type=1&g_ty=ajax`
-    if (Object.keys(params).length !== 0) {
-      let key: (keyof Params)
-      for (key in params) {
-        if (params.hasOwnProperty(key))
-          url += `&${key}=${params[key]}`
+    if (t.dateType === 2 && t.completedTimes < t.targetTimes && t.awardStatus === 2 && t.taskType === 2) {
+      res = await api('DoTask', 'bizCode,configExtra,source,taskId', {taskId: t.taskId, configExtra: ''})
+      if (res.ret === 0) {
+        console.log('任务完成')
+        await wait(5000)
+        return 1
+      } else {
+        console.log('任务失败:', res)
+        return 0
       }
     }
-    url += '&h5st=' + decrypt(stk, url)
-    let {data} = await axios.get(url, {
-      headers: {
-        'Origin': 'https://st.jingxi.com',
-        'Accept-Language': 'zh-cn',
-        'Connection': 'keep-alive',
-        'Host': 'm.jingxi.com',
-        'Referer': 'https://st.jingxi.com/pingou/jxmc/index.html?nativeConfig=%7B%22immersion%22%3A1%2C%22toColor%22%3A%22%23e62e0f%22%7D&__mcwvt=sjcp&PTAG=139279.13.31&jxsid=16257474246337594063',
-        'Accept': 'application/json',
-        'User-Agent': 'jdpingou;iPhone;4.11.0;12.4.1;52cf225f0c463b69e1e36b11783074f9a7d9cbf0;network/wifi;model/iPhone11,6;appBuild/100591;ADID/C51FD279-5C69-4F94-B1C5-890BC8EB501F;supportApplePay/1;hasUPPay/0;pushNoticeIsOpen/0;hasOCPay/0;supportBestPay/0;session/503;pap/JA2019_3111789;brand/apple;supportJDSHWK/1;Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
-        'Cookie': cookie
-      }
-    })
-    resolve(data)
-  })
+  }
+  return 0
 }
 
-function makeShareCodes(code: string) {
-  return new Promise(async (resolve, reject) => {
+async function api(fn: string, stk: string, params: Params = {}, temporary: boolean = false) {
+  let url: string
+  if (['GetUserTaskStatusList', 'DoTask', 'Award'].indexOf(fn) > -1) {
+    if (temporary)
+      url = h5st(`https://m.jingxi.com/newtasksys/newtasksys_front/${fn}?_=${Date.now()}&source=jxmc_zanaixin&bizCode=jxmc_zanaixin&_stk=${encodeURIComponent(stk)}&_ste=1&sceneval=2&g_login_type=1&callback=jsonpCBK${randomWord()}&g_ty=ls`, stk, params, 10028)
+    else
+      url = h5st(`https://m.jingxi.com/newtasksys/newtasksys_front/${fn}?_=${Date.now()}&source=jxmc&bizCode=jxmc&_stk=${encodeURIComponent(stk)}&_ste=1&sceneval=2&g_login_type=1&callback=jsonpCBK${randomWord()}&g_ty=ls`, stk, params, 10028)
+  } else {
+    url = h5st(`https://m.jingxi.com/jxmc/${fn}?channel=7&sceneid=1001&activeid=jxmc_active_0001&activekey=null&jxmc_jstoken=${jxToken['farm_jstoken']}&timestamp=${jxToken['timestamp']}&phoneid=${jxToken['phoneid']}&_stk=${encodeURIComponent(stk)}&_ste=1&_=${Date.now()}&sceneval=2&g_login_type=1&callback=jsonpCBK${randomWord()}&g_ty=ls`, stk, params, 10028)
+  }
+  let {data}: any = await axios.get(url, {
+    headers: {
+      'Host': 'm.jingxi.com',
+      'Accept': '*/*',
+      'User-Agent': 'jdpingou;iPhone;5.15.0;15.1;3271867e5dc749cc8cc76aa5aa6a084eea8e7920;network/wifi;model/iPhone11,6;appBuild/100779;ADID/;supportApplePay/1;hasUPPay/0;pushNoticeIsOpen/0;hasOCPay/0;supportBestPay/0;session/15;pap/JA2019_3111789;brand/apple;supportJDSHWK/1;Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+      'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
+      'Referer': 'https://st.jingxi.com/',
+      'Cookie': cookie
+    }
+  })
+  return JSON.parse(data.match(/jsonpCBK.?\((.*)/)![1])
+}
+
+async function makeShareCodes(code: string) {
+  try {
     let bean: string = await getBeanShareCode(cookie)
     let farm: string = await getFarmShareCode(cookie)
-    let pin: string = cookie.match(/pt_pin=([^;]*)/)![1]
-    pin = Md5.hashStr(pin)
-    await axios.get(`https://api.sharecode.ga/api/autoInsert?db=jxmc&code=${code}&bean=${bean}&farm=${farm}&pin=${pin}`, {timeout: 10000})
-      .then(res => {
-        if (res.data.code === 200)
-          console.log('已自动提交助力码')
-        else
-          console.log('提交失败！已提交farm的cookie才可提交cfd')
-        resolve(200)
-      })
-      .catch(() => {
-        reject('访问助力池出错')
-      })
-  })
-}
-
-async function requestAlgo() {
-  fingerprint = await generateFp();
-  return new Promise(async resolve => {
-    let {data} = await axios.post('https://cactus.jd.com/request_algo?g_ty=ajax', {
-      "version": "1.0",
-      "fp": fingerprint,
-      "appId": appId,
-      "timestamp": Date.now(),
-      "platform": "web",
-      "expandParams": ""
-    }, {
-      "headers": {
-        'Authority': 'cactus.jd.com',
-        'Pragma': 'no-cache',
-        'Cache-Control': 'no-cache',
-        'Accept': 'application/json',
-        'User-Agent': USER_AGENT,
-        'Content-Type': 'application/json',
-        'Origin': 'https://st.jingxi.com',
-        'Sec-Fetch-Site': 'cross-site',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Dest': 'empty',
-        'Referer': 'https://st.jingxi.com/',
-        'Accept-Language': 'zh-CN,zh;q=0.9,zh-TW;q=0.8,en;q=0.7'
-      },
-    })
-    if (data['status'] === 200) {
-      token = data.data.result.tk;
-      let enCryptMethodJDString = data.data.result.algo;
-      if (enCryptMethodJDString) enCryptMethodJD = new Function(`return ${enCryptMethodJDString}`)();
-    } else {
-      console.log(`fp: ${fingerprint}`)
-      console.log('request_algo 签名参数API请求失败:')
-    }
-    resolve(200)
-  })
-}
-
-function decrypt(stk: string, url: string) {
-  const timestamp = (format(new Date(), 'yyyyMMddhhmmssSSS'))
-  let hash1: string;
-  if (fingerprint && token && enCryptMethodJD) {
-    hash1 = enCryptMethodJD(token, fingerprint.toString(), timestamp.toString(), appId.toString(), CryptoJS).toString(CryptoJS.enc.Hex);
-  } else {
-    const random = '5gkjB6SpmC9s';
-    token = `tk01wcdf61cb3a8nYUtHcmhSUFFCfddDPRvKvYaMjHkxo6Aj7dhzO+GXGFa9nPXfcgT+mULoF1b1YIS1ghvSlbwhE0Xc`;
-    fingerprint = 9686767825751161;
-    // $.fingerprint = 7811850938414161;
-    const str = `${token}${fingerprint}${timestamp}${appId}${random}`;
-    hash1 = CryptoJS.SHA512(str, token).toString(CryptoJS.enc.Hex);
+    let pin: string = Md5.hashStr(cookie.match(/pt_pin=([^;]*)/)![1])
+    let {data}: any = await axios.get(`https://api.jdsharecode.xyz/api/autoInsert/jxmc?sharecode=${code}&bean=${bean}&farm=${farm}&pin=${pin}`)
+    console.log(data.message)
+  } catch (e) {
+    console.log('自动提交失败')
+    console.log(e)
   }
-  let st: string = '';
-  stk.split(',').map((item, index) => {
-    st += `${item}:${getQueryString(url, item)}${index === stk.split(',').length - 1 ? '' : '&'}`;
-  })
-  const hash2 = CryptoJS.HmacSHA256(st, hash1.toString()).toString(CryptoJS.enc.Hex);
-  return encodeURIComponent(["".concat(timestamp.toString()), "".concat(fingerprint.toString()), "".concat(appId.toString()), "".concat(token), "".concat(hash2)].join(";"))
-}
-
-function generateFp() {
-  let e = "0123456789";
-  let a = 13;
-  let i = '';
-  for (; a--;)
-    i += e[Math.random() * e.length | 0];
-  return (i + Date.now()).slice(0, 16)
-}
-
-function getQueryString(url: string, name: string) {
-  let reg = new RegExp("(^|&)" + name + "=([^&]*)(&|$)", "i");
-  let r = url.split('?')[1].match(reg);
-  if (r != null) return unescape(r[2]);
-  return '';
 }

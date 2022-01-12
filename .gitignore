@@ -9,4 +9,6 @@
 /JD_DailyBonus.js
 /result.txt
 /.DS_Store
+.DS_Store
 /tools/account.json
+/utils/exceptCookie.json
